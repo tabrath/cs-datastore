@@ -5,11 +5,11 @@ using System.Runtime.InteropServices;
 // General Information about an assembly is controlled through the following 
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle("Datastore")]
-[assembly: AssemblyDescription("datastore")]
+[assembly: AssemblyTitle("Datastore.Flatfs")]
+[assembly: AssemblyDescription("datastore flatfs")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("tabrath")]
-[assembly: AssemblyProduct("Datastore")]
+[assembly: AssemblyProduct("Datastore.Flatfs")]
 [assembly: AssemblyCopyright("Copyright © tabrath 2016")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
@@ -20,7 +20,7 @@ using System.Runtime.InteropServices;
 [assembly: ComVisible(false)]
 
 // The following GUID is for the ID of the typelib if this project is exposed to COM
-[assembly: Guid("7fadf9ef-60f4-4656-b1a6-d9c33081a2f3")]
+[assembly: Guid("c4f6e421-0e0d-4521-a51b-6e28b3815f35")]
 
 // Version information for an assembly consists of the following four values:
 //

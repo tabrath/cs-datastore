@@ -5,11 +5,11 @@ using System.Runtime.InteropServices;
 // General Information about an assembly is controlled through the following 
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle("Datastore")]
-[assembly: AssemblyDescription("datastore")]
+[assembly: AssemblyTitle("Datastore.AutoBatch")]
+[assembly: AssemblyDescription("datastore autobatching")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("tabrath")]
-[assembly: AssemblyProduct("Datastore")]
+[assembly: AssemblyProduct("Datastore.AutoBatch")]
 [assembly: AssemblyCopyright("Copyright © tabrath 2016")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
@@ -20,7 +20,7 @@ using System.Runtime.InteropServices;
 [assembly: ComVisible(false)]
 
 // The following GUID is for the ID of the typelib if this project is exposed to COM
-[assembly: Guid("7fadf9ef-60f4-4656-b1a6-d9c33081a2f3")]
+[assembly: Guid("33c6fea8-2b52-4410-8854-9d1b2ddca61f")]
 
 // Version information for an assembly consists of the following four values:
 //
