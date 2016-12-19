@@ -7,7 +7,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Datastore.Query;
 using Datastore.Sync;
-using NChannels;
 
 namespace Datastore.Coalesce
 {

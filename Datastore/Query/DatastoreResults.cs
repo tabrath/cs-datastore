@@ -1,8 +1,9 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using NChannels;
 
 namespace Datastore.Query
 {
@@ -11,9 +12,9 @@ namespace Datastore.Query
         public DatastoreQuery<T> DatastoreQuery { get; }
         public CancellationTokenSource Cancellation { get; }
 
-        private readonly Chan<DatastoreResult<T>> _res;
+        private readonly BlockingCollection<DatastoreResult<T>> _res;
 
-        internal DatastoreResults(DatastoreQuery<T> datastoreQuery, CancellationTokenSource cancellation, Chan<DatastoreResult<T>> res)
+        internal DatastoreResults(DatastoreQuery<T> datastoreQuery, CancellationTokenSource cancellation, BlockingCollection<DatastoreResult<T>> res)
         {
             DatastoreQuery = datastoreQuery;
             Cancellation = cancellation;
@@ -25,21 +26,28 @@ namespace Datastore.Query
             Cancellation.Dispose();
         }
 
-        public Chan<DatastoreResult<T>> Next() => _res;
+        public BlockingCollection<DatastoreResult<T>> Next() => _res;
 
         public DatastoreEntry<T>[] Rest()
         {
             var es = new List<DatastoreEntry<T>>();
-            _res.Where(e => e.Error == null)
-                .ForEach(e => es.Add(e))
-                .Wait();
+
+            while (!_res.IsCompleted && !Cancellation.IsCancellationRequested)
+            {
+                DatastoreResult<T> e;
+                if (!_res.TryTake(out e, Timeout.Infinite, Cancellation.Token))
+                    break;
+
+                es.Add(e);
+            }
+
             return es.ToArray();
         }
 
         public class ResultBuilder
         {
             public DatastoreQuery<T> DatastoreQuery { get; }
-            public Chan<DatastoreResult<T>> Output { get; }
+            public BlockingCollection<DatastoreResult<T>> Output { get; }
             public CancellationTokenSource Cancellation { get; }
 
             public ResultBuilder(DatastoreQuery<T> q)
@@ -49,20 +57,26 @@ namespace Datastore.Query
                     bufSize = DatastoreQuery<T>.KeysOnlyBufferSize;
 
                 DatastoreQuery = q;
-                Output = new Chan<DatastoreResult<T>>(bufSize);
+                Output = new BlockingCollection<DatastoreResult<T>>(bufSize);
                 Cancellation = new CancellationTokenSource();
-                Cancellation.Token.Register(() => Output.Close());
+                Cancellation.Token.Register(() => Output.CompleteAdding());
             }
 
             public DatastoreResults<T> Results() => new DatastoreResults<T>(DatastoreQuery, Cancellation, Output);
         }
 
-        public static DatastoreResults<T> WithChannel(DatastoreQuery<T> q, Chan<DatastoreResult<T>> res)
+        public static DatastoreResults<T> WithCollection(DatastoreQuery<T> q, BlockingCollection<DatastoreResult<T>> res)
         {
             var b = new ResultBuilder(q);
 
-            res.Forward(b.Output)
-                .ContinueWith(_ => b.Output.Close());
+            Task.Factory.StartNew(() =>
+            {
+                DatastoreResult<T> item;
+                while (res.TryTake(out item, Timeout.Infinite, b.Cancellation.Token))
+                {
+                    b.Output.Add(item, b.Cancellation.Token);
+                }
+            }).ContinueWith(_ => b.Output.CompleteAdding());
 
             return b.Results();
         }
@@ -71,113 +85,145 @@ namespace Datastore.Query
         {
             var b = new ResultBuilder(q);
 
-            b.Output
-                .Send(res.Select(e => new DatastoreResult<T>(e)))
-                .ContinueWith(_ => b.Output.Close());
+            Task.Factory.StartNew(() =>
+            {
+                foreach (var r in res.Select(e => new DatastoreResult<T>(e)))
+                {
+                    b.Output.Add(r, b.Cancellation.Token);
+                }
+            }).ContinueWith(_ => b.Output.CompleteAdding());
 
             return b.Results();
         }
 
         public static DatastoreResults<T> ReplaceQuery(DatastoreResults<T> r, DatastoreQuery<T> q) => new DatastoreResults<T>(q, r.Cancellation, r.Next());
-        public DatastoreResults<T> DerivedResults(Chan<DatastoreResult<T>> ch) => new DatastoreResults<T>(DatastoreQuery, Cancellation, ch);
+        public DatastoreResults<T> DerivedResults(BlockingCollection<DatastoreResult<T>> ch) => new DatastoreResults<T>(DatastoreQuery, Cancellation, ch);
 
         public DatastoreResults<T> NaiveFilter(QueryFilter<T> queryFilter)
         {
-            var ch = new Chan<DatastoreResult<T>>();
+            var bc = new BlockingCollection<DatastoreResult<T>>();
 
-            Next()
-                .Where(e => e.Error != null || queryFilter.Apply(e))
-                .Forward(ch)
-                .ContinueWith(_ =>
+            Task.Factory.StartNew(() =>
+            {
+                while (!_res.IsCompleted && !Cancellation.IsCancellationRequested)
                 {
-                    ch.Close();
-                    Close();
-                });
+                    DatastoreResult<T> item;
+                    if (_res.TryTake(out item, Timeout.Infinite, Cancellation.Token) && item.Error == null &&
+                        queryFilter.Apply(item))
+                    {
+                        if (!bc.TryAdd(item, Timeout.Infinite, Cancellation.Token))
+                            break;
+                    }
+                }
+            }).ContinueWith(_ => bc.CompleteAdding());
 
-            return DerivedResults(ch);
+            return DerivedResults(bc);
         }
 
         public DatastoreResults<T> NaiveLimit(int limit)
         {
-            var ch = new Chan<DatastoreResult<T>>();
+            var bc = new BlockingCollection<DatastoreResult<T>>();
 
-            Task.Factory.StartNew(async () =>
+            Task.Factory.StartNew(() =>
             {
                 var l = 0;
-                ChanResult<DatastoreResult<T>> e;
-                while ((e = await Next().Receive()).IsSuccess)
+                while (!_res.IsCompleted && !Cancellation.IsCancellationRequested)
                 {
-                    if (e.Result.Error != null)
+                    DatastoreResult<T> item;
+                    if (!_res.TryTake(out item, Timeout.Infinite, Cancellation.Token))
+                        break;
+
+                    if (item.Error != null)
                     {
-                        await ch.Send(e.Result);
+                        if (!bc.TryAdd(item, Timeout.Infinite, Cancellation.Token))
+                            break;
+
                         continue;
                     }
 
-                    await ch.Send(e.Result);
-                    l++;
-                    if (limit > 0 && l >= limit)
+                    if (!bc.TryAdd(item, Timeout.Infinite, Cancellation.Token))
+                        break;
+
+                    if (limit > 0 && ++l >= limit)
                         break;
                 }
-            })
-            .ContinueWith(_ => ch.Close());
+            }).ContinueWith(_ => bc.CompleteAdding());
 
-            return DerivedResults(ch);
+            return DerivedResults(bc);
         }
 
         public DatastoreResults<T> NaiveOffset(int offset)
         {
-            var ch = new Chan<DatastoreResult<T>>();
+            var bc = new BlockingCollection<DatastoreResult<T>>();
 
-            Task.Factory.StartNew(async () =>
+            Task.Factory.StartNew(() =>
             {
                 var sent = 0;
-                ChanResult<DatastoreResult<T>> e;
-                while ((e = await Next().Receive()).IsSuccess)
+                while (!_res.IsCompleted && !Cancellation.IsCancellationRequested)
                 {
-                    if (e.Result.Error != null)
+                    DatastoreResult<T> item;
+                    if (!_res.TryTake(out item, Timeout.Infinite, Cancellation.Token))
+                        break;
+
+                    if (item.Error != null)
                     {
-                        await ch.Send(e.Result);
+                        if (!bc.TryAdd(item, Timeout.Infinite, Cancellation.Token))
+                            break;
+
                         continue;
                     }
 
-                    if (sent < offset)
-                    {
-                        sent++;
+                    if (++sent <= offset)
                         continue;
-                    }
-                    await ch.Send(e.Result);
+
+                    if (!bc.TryAdd(item, Timeout.Infinite, Cancellation.Token))
+                        break;
                 }
-            })
-            .ContinueWith(_ => ch.Close());
+            }).ContinueWith(_ => bc.CompleteAdding());
 
-            return DerivedResults(ch);
+            return DerivedResults(bc);
         }
 
         public DatastoreResults<T> NaiveOrder(QueryOrder<T> o)
         {
-            var ch = new Chan<DatastoreResult<T>>();
+            var bc = new BlockingCollection<DatastoreResult<T>>();
 
-            var entries = new List<DatastoreEntry<T>>();
-            Next().ForEach(async e =>
+            Task.Factory.StartNew(() =>
+            {
+                var entries = new List<DatastoreEntry<T>>();
+                while (!_res.IsCompleted && !Cancellation.IsCancellationRequested)
                 {
-                    if (e.Error != null)
-                        await ch.Send(e);
-                    else
+                    DatastoreResult<T> item;
+                    if (!_res.TryTake(out item, Timeout.Infinite, Cancellation.Token))
+                        break;
+
+                    if (item.Error != null)
                     {
-                        lock (entries)
-                        {
-                            entries.Add(e);
-                        }
+                        if (!bc.TryAdd(item, Timeout.Infinite, Cancellation.Token))
+                            break;
+
+                        continue;
+                    }
+
+                    entries.Add(item);
+                }
+                return entries;
+            })
+            .ContinueWith(t =>
+                {
+                    o.Sort(t.Result);
+                    foreach (var entry in t.Result)
+                    {
+                        if (Cancellation.IsCancellationRequested)
+                            break;
+
+                        if (!bc.TryAdd(new DatastoreResult<T>(entry), Timeout.Infinite, Cancellation.Token))
+                            break;
                     }
                 })
-                .ContinueWith(_ =>
-                {
-                    o.Sort(entries);
-                    ch.Send(entries.Select(x => new DatastoreResult<T>(x)))
-                        .ContinueWith(__ => ch.Close());
-                });
+            .ContinueWith(_ => bc.CompleteAdding());
 
-            return DerivedResults(ch);
+            return DerivedResults(bc);
         }
 
         public DatastoreResults<T> NaiveQueryApply()

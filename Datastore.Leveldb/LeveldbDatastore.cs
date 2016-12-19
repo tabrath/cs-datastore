@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Datastore.Extensions;
 using Datastore.Query;
@@ -55,7 +56,7 @@ namespace Datastore.Leveldb
             var qrb = new DatastoreResults<byte[]>.ResultBuilder(q);
 
             Task.Run(() => RunQuery(qrb))
-                .ContinueWith(_ => qrb.Output.Close());
+                .ContinueWith(_ => qrb.Output.CompleteAdding());
 
             var qr = qrb.Results();
             foreach (var filter in q.QueryFilters)
@@ -114,7 +115,8 @@ namespace Datastore.Leveldb
                         var v = qrb.DatastoreQuery.KeysOnly ? null : i.Value().ToArray();
                         var e = new DatastoreEntry<byte[]>(k, v);
 
-                        qrb.Output.Send(new DatastoreResult<byte[]>(e)).Wait(qrb.Cancellation.Token);
+                        if (!qrb.Output.TryAdd(new DatastoreResult<byte[]>(e), Timeout.Infinite, qrb.Cancellation.Token))
+                            break;
                     }
 
                     i.Next();

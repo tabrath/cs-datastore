@@ -1,7 +1,9 @@
 ﻿using System;
+using System.Collections.Concurrent;
+using System.Linq;
+using System.Threading.Tasks;
 using Datastore.Query;
 using Datastore.Sync;
-using NChannels;
 
 namespace Datastore.KeyTransform
 {
@@ -37,13 +39,19 @@ namespace Datastore.KeyTransform
         {
             var qr = _child.Query(q);
 
-            var ch = new Chan<DatastoreResult<T>>();
+            var ch = new BlockingCollection<DatastoreResult<T>>();
 
-            qr.Next()
-                .Where(r => r.Error == null)
-                .Select(r => new DatastoreResult<T>(InvertKey(r.DatastoreKey), r.Value))
-                .Forward(ch)
-                .ContinueWith(_ => ch.Close());
+            Task.Factory.StartNew(() =>
+            {
+                foreach (var result in qr.Next())
+                {
+                    if (result.Error == null)
+                    {
+                        if (!ch.TryAdd(new DatastoreResult<T>(InvertKey(result.DatastoreKey), result.Value)))
+                            break;
+                    }
+                }
+            }).ContinueWith(_ => ch.CompleteAdding());
 
             return qr.DerivedResults(ch);
         }

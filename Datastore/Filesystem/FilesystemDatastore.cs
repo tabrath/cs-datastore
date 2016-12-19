@@ -1,10 +1,12 @@
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.Serialization.Formatters.Binary;
+using System.Threading;
+using System.Threading.Tasks;
 using Datastore.Query;
 using Datastore.Sync;
-using NChannels;
 
 namespace Datastore.Filesystem
 {
@@ -40,7 +42,11 @@ namespace Datastore.Filesystem
 
             using (var stream = File.Create(fn))
             {
-                _bf.Serialize(stream, value);
+                var bytes = value as byte[];
+                if (bytes != null)
+                    stream.Write(bytes, 0, bytes.Length);
+                else
+                    _bf.Serialize(stream, value);
             }
         }
 
@@ -52,6 +58,13 @@ namespace Datastore.Filesystem
 
             using (var stream = File.OpenRead(fn))
             {
+                if (typeof(T) is byte[])
+                {
+                    var value = new byte[stream.Length];
+                    stream.Read(value, 0, value.Length);
+                    return (T)(object) value;
+                }
+
                 return (T)_bf.Deserialize(stream);
             }
         }
@@ -69,25 +82,32 @@ namespace Datastore.Filesystem
 
         public DatastoreResults<T> Query(DatastoreQuery<T> q)
         {
-            var results = new Chan<DatastoreResult<T>>();
+            var results = new BlockingCollection<DatastoreResult<T>>();
 
-            results.Send(new DirectoryInfo(_path).EnumerateFiles("*" + ObjectKeySuffix, SearchOption.AllDirectories)
-                    .Select(f =>
+            Task.Factory.StartNew(() =>
+                {
+                    foreach (var item in new DirectoryInfo(_path).EnumerateFiles("*" + ObjectKeySuffix, SearchOption.AllDirectories)
+                        .Select(f =>
+                        {
+                            var path = f.FullName;
+                            if (path.StartsWith(_path))
+                                path = path.Substring(_path.Length);
+
+                            if (Path.IsPathRooted(path))
+                                path = path.TrimStart(Path.DirectorySeparatorChar);
+
+                            var key = new DatastoreKey(path.Substring(0, path.IndexOf(ObjectKeySuffix)));
+                            var entry = new DatastoreEntry<T>(key, default(T));
+                            return new DatastoreResult<T>(entry);
+                        }))
                     {
-                        var path = f.FullName;
-                        if (path.StartsWith(_path))
-                            path = path.Substring(_path.Length);
+                        if (!results.TryAdd(item, Timeout.Infinite))
+                            break;
+                    }
+                })
+                .ContinueWith(_ => results.CompleteAdding());
 
-                        if (Path.IsPathRooted(path))
-                            path = path.TrimStart(Path.DirectorySeparatorChar);
-
-                        var key = new DatastoreKey(path.Substring(0, path.IndexOf(ObjectKeySuffix)));
-                        var entry = new DatastoreEntry<T>(key, default(T));
-                        return new DatastoreResult<T>(entry);
-                    }))
-                .ContinueWith(_ => results.Close());
-
-            return DatastoreResults<T>.WithChannel(q, results).NaiveQueryApply();
+            return DatastoreResults<T>.WithCollection(q, results).NaiveQueryApply();
         }
 
         public IThreadSafeDatastore<T> Synchronized() => new SynchronizedDatastore<T>(this);
