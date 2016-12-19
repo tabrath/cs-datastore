@@ -105,6 +105,7 @@ namespace Datastore
         public override string ToString() => _value;
         public byte[] ToBytes() => Encoding.UTF8.GetBytes(_value);
         public override bool Equals(object obj) => Equals(obj as DatastoreKey);
+        public override int GetHashCode() => _value.GetHashCode();
         public string[] List() => _value.Split(new[] {'/'}, StringSplitOptions.RemoveEmptyEntries);
         public DatastoreKey Reverse() => new DatastoreKey(List().Reverse().ToArray());
         public string[] Namespaces => List();

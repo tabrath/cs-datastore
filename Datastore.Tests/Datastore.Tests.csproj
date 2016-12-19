@@ -59,6 +59,7 @@
   <ItemGroup>
     <Compile Include="FilesystemDatastoreTests.cs" />
     <Compile Include="FilterTests.cs" />
+    <Compile Include="NamespaceDatastoreTests.cs" />
     <Compile Include="OrderTests.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="QueryTests.cs" />

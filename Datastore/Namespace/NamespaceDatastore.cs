@@ -34,7 +34,7 @@ namespace Datastore.Namespace
                         }
 
                         var k = new DatastoreKey(e.DatastoreKey);
-                        if (!_prefix.IsAncestorOf(k))
+                        if (_prefix.IsAncestorOf(k))
                         {
                             if (!ch.TryAdd(new DatastoreResult<T>(InvertKey(k), e.Value)))
                                 break;
