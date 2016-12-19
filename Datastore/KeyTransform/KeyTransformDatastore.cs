@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Datastore.Query;
 using Datastore.Sync;
@@ -47,7 +48,7 @@ namespace Datastore.KeyTransform
                 {
                     if (result.Error == null)
                     {
-                        if (!ch.TryAdd(new DatastoreResult<T>(InvertKey(result.DatastoreKey), result.Value)))
+                        if (!ch.TryAdd(new DatastoreResult<T>(InvertKey(result.DatastoreKey), result.Value), Timeout.Infinite, CancellationToken.None))
                             break;
                     }
                 }

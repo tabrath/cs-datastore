@@ -63,5 +63,31 @@ namespace Datastore.Tests
                 Assert.That(kA, Is.EqualTo(nsds.ConvertKey(kB)));
             }
         }
+
+        [Test]
+        public void TestGetAllKeys()
+        {
+            var mpds = new MapDatastore<byte[]>();
+            var nsds = new NamespaceDatastore<byte[]>(mpds, new DatastoreKey("abc"));
+            var keys = new[]
+            {
+                "foo",
+                "foo/bar",
+                "foo/bar/baz",
+                "foo/barb",
+                "foo/bar/bazb",
+                "foo/bar/baz/barb",
+            }.Select(s => new DatastoreKey(s)).ToArray();
+
+            foreach (var key in keys)
+            {
+                nsds.Put(key, Encoding.UTF8.GetBytes(key.ToString()));
+            }
+
+            var res = nsds.Query(new DatastoreQuery<byte[]>(keysOnly: true));
+            var fetchedKeys = res.Rest().Select(r => r.DatastoreKey);
+
+            Assert.That(fetchedKeys, Is.EqualTo(keys));
+        }
     }
 }
