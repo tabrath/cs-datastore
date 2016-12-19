@@ -1,7 +1,7 @@
-﻿using System.Threading.Tasks;
+﻿using System.Collections.Concurrent;
+using System.Threading.Tasks;
 using Datastore.KeyTransform;
 using Datastore.Query;
-using NChannels;
 
 namespace Datastore.Namespace
 {
@@ -19,27 +19,29 @@ namespace Datastore.Namespace
         {
             var qr = _child.Query(q);
 
-            var ch = new Chan<DatastoreResult<T>>();
+            var ch = new BlockingCollection<DatastoreResult<T>>();
 
-            Task.Factory.StartNew(async () =>
+            Task.Factory.StartNew(() =>
                 {
                     var l = 0;
-                    ChanResult<DatastoreResult<T>> e;
-                    while ((e = await qr.Next().Receive()).IsSuccess)
+                    DatastoreResult<T> e;
+                    while (qr.Next().TryTake(out e))
                     {
-                        if (e.Result.Error != null)
+                        if (e.Error != null)
                         {
-                            await ch.Send(e.Result);
+                            ch.Add(e);
                             continue;
                         }
 
-                        var k = new DatastoreKey(e.Result.DatastoreKey);
+                        var k = new DatastoreKey(e.DatastoreKey);
                         if (!_prefix.IsAncestorOf(k))
-
-                            await ch.Send(new DatastoreResult<T>(InvertKey(k), e.Result.Value));
+                        {
+                            if (!ch.TryAdd(new DatastoreResult<T>(InvertKey(k), e.Value)))
+                                break;
+                        }
                     }
                 })
-                .ContinueWith(_ => ch.Close());
+                .ContinueWith(_ => ch.CompleteAdding());
 
             return qr.DerivedResults(ch);
         }

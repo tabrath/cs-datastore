@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -10,7 +11,6 @@ using System.Threading.Tasks;
 using Datastore.Extensions;
 using Datastore.Query;
 using Datastore.Sync;
-using NChannels;
 
 namespace Datastore.Flatfs
 {
@@ -273,15 +273,15 @@ namespace Datastore.Flatfs
                 !q.KeysOnly)
                 throw new Exception("flatfs only supports listing all keys in random order");
 
-            var reschan = new Chan<DatastoreResult<byte[]>>(DatastoreQuery<byte[]>.KeysOnlyBufferSize);
+            var reschan = new BlockingCollection<DatastoreResult<byte[]>>(DatastoreQuery<byte[]>.KeysOnlyBufferSize);
 
             Task.Run(() => WalkTopLevel(_path, reschan))
-                .ContinueWith(_ => reschan.Close());
+                .ContinueWith(_ => reschan.CompleteAdding());
 
-            return DatastoreResults<byte[]>.WithChannel(q, reschan);
+            return DatastoreResults<byte[]>.WithCollection(q, reschan);
         }
 
-        private void WalkTopLevel(string path, Chan<DatastoreResult<byte[]>> reschan)
+        private void WalkTopLevel(string path, BlockingCollection<DatastoreResult<byte[]>> reschan)
         {
             foreach (var dir in Directory.EnumerateDirectories(path))
             {
@@ -292,7 +292,7 @@ namespace Datastore.Flatfs
             }
         }
 
-        private void Walk(string path, Chan<DatastoreResult<byte[]>> reschan)
+        private void Walk(string path, BlockingCollection<DatastoreResult<byte[]>> reschan)
         {
             foreach (var file in Directory.EnumerateFiles(path))
             {
@@ -302,8 +302,9 @@ namespace Datastore.Flatfs
                 DatastoreKey key;
                 if (!Decode(file, out key))
                     continue;
-
-                reschan.Send(new DatastoreResult<byte[]>(key, null)).Wait();
+               
+                if (!reschan.TryAdd(new DatastoreResult<byte[]>(key, null)))
+                    break;
             }
         }
 
